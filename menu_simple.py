@@ -1,0 +1,481 @@
+from ultralytics import YOLO
+import cv2
+from pathlib import Path
+import os
+
+class MenuEPP:
+    def __init__(self):
+        self.model_path = r"C:\Users\Angel Del C\Desktop\OroParaIA\PruebaRealTime\best.pt"
+        self.clases = [
+            'Fall-Detected', 'Gloves', 'Goggles', 'Hardhat', 'Ladder',
+            'Mask', 'NO-Gloves', 'NO-Goggles', 'NO-Hardhat', 'NO-Mask',
+            'NO-Safety Vest', 'Person', 'Safety Cone', 'Safety Vest'
+        ]
+        # Pines GPIO para Jetson Nano
+        self.pin_detectado = 17      # Se activa cuando SE detectan todas las clases
+        self.pin_no_detectado = 27   # Se activa cuando NO se detectan todas
+        
+    def limpiar(self):
+        os.system('cls' if os.name == 'nt' else 'clear')
+    
+    def menu_principal(self):
+        while True:
+            self.limpiar()
+            print("=" * 60)
+            print(" " * 18 + "🔧 DETECCIÓN EPP")
+            print("=" * 60)
+            print(f"\n📦 Modelo: {Path(self.model_path).name}")
+            print(f"🔌 GPIO Jetson: Pin {self.pin_detectado} (✅) | Pin {self.pin_no_detectado} (❌)")
+            print("\n  [1] 📹 Detección en Vivo (Cámara)")
+            print("  [2] 🎬 Detección por Video")
+            print("  [3] ⚡ Optimizar Modelo (ONNX)")
+            print("  [4] 🔄 Cambiar Modelo")
+            print("  [0] ❌ Salir")
+            print("\n" + "=" * 60)
+            
+            opcion = input("\n➤ Selecciona: ").strip()
+            
+            if opcion == '0':
+                print("\n👋 ¡Hasta luego!")
+                break
+            elif opcion == '1':
+                self.deteccion_vivo()
+            elif opcion == '2':
+                self.deteccion_video()
+            elif opcion == '3':
+                self.optimizar()
+            elif opcion == '4':
+                self.cambiar_modelo()
+            else:
+                print("\n❌ Opción inválida")
+                input("\nPresiona Enter...")
+    
+    def deteccion_vivo(self):
+        """Detección en tiempo real con cámara"""
+        self.limpiar()
+        print("=" * 60)
+        print(" " * 18 + "📹 DETECCIÓN EN VIVO")
+        print("=" * 60)
+        
+        # Configuración
+        print("\nUmbral de confianza (0.1-1.0, default 0.25): ", end="")
+        try:
+            conf = float(input().strip() or "0.25")
+            conf = max(0.1, min(1.0, conf))
+        except:
+            conf = 0.25
+        
+        print(f"\n🔄 Cargando modelo (conf={conf})...")
+        
+        try:
+            model = YOLO(self.model_path)
+            cap = cv2.VideoCapture(0)
+            
+            if not cap.isOpened():
+                print("❌ No se puede acceder a la cámara")
+                input("\nPresiona Enter...")
+                return
+            
+            print("✅ Iniciando detección")
+            print("💡 Presiona 'q' para salir\n")
+            
+            # Configurar GPIO si está en Jetson
+            gpio_ok = self._setup_gpio()
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # Detección
+                results = model(frame, conf=conf, verbose=False)
+                annotated = results[0].plot()
+                
+                # Control de pines GPIO
+                if gpio_ok:
+                    self._control_pines(results[0])
+                
+                cv2.imshow('Detección en Vivo - Presiona Q para salir', annotated)
+                
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+            
+            cap.release()
+            cv2.destroyAllWindows()
+            
+            if gpio_ok:
+                self._cleanup_gpio()
+                
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
+        
+        input("\nPresiona Enter...")
+    
+    def deteccion_video(self):
+        """Detección en video con selección de clases"""
+        self.limpiar()
+        print("=" * 60)
+        print(" " * 18 + "🎬 DETECCIÓN POR VIDEO")
+        print("=" * 60)
+        
+        # Paso 1: Seleccionar clases
+        clases_objetivo = self._seleccionar_clases()
+        if clases_objetivo is None:
+            return
+        
+        # Paso 2: Configuración
+        self.limpiar()
+        print("=" * 60)
+        print(" " * 18 + "⚙️  CONFIGURACIÓN")
+        print("=" * 60)
+        
+        if clases_objetivo:
+            print(f"\n🎯 Clases: {', '.join(clases_objetivo[:3])}{'...' if len(clases_objetivo) > 3 else ''} ({len(clases_objetivo)} total)")
+        else:
+            print("\n🎯 Clases: TODAS (14)")
+        
+        print("\nRuta del video: ", end="")
+        video = input().strip().strip('"')
+        
+        if not Path(video).exists():
+            print("\n❌ Archivo no encontrado")
+            input("\nPresiona Enter...")
+            return
+        
+        print("Umbral de confianza (default 0.25): ", end="")
+        try:
+            conf = float(input().strip() or "0.25")
+            conf = max(0.1, min(1.0, conf))
+        except:
+            conf = 0.25
+        
+        print("¿Guardar video procesado? (s/n): ", end="")
+        guardar = input().lower().strip() == 's'
+        
+        print("¿Mostrar durante procesamiento? (s/n): ", end="")
+        mostrar = input().lower().strip() == 's'
+        
+        # Paso 3: Procesar
+        print("\n" + "-" * 60)
+        print("🔄 Procesando...")
+        print("-" * 60 + "\n")
+        
+        self._procesar_video(video, clases_objetivo, conf, guardar, mostrar)
+        
+        input("\nPresiona Enter...")
+    
+    def _seleccionar_clases(self):
+        """Interfaz para seleccionar clases a detectar"""
+        self.limpiar()
+        print("=" * 60)
+        print(" " * 15 + "🎯 SELECCIÓN DE CLASES")
+        print("=" * 60)
+        print("\n📋 CLASES DISPONIBLES:\n")
+        
+        for i, clase in enumerate(self.clases, 1):
+            print(f"  [{i:2d}] {clase}")
+        
+        print("\n" + "=" * 60)
+        print("💡 COMANDOS:")
+        print("  • Número (1-14)  → Agregar/Quitar clase")
+        print("  • 'todos'        → Todas las clases")
+        print("  • 'ver'          → Ver selección actual")
+        print("  • 'limpiar'      → Vaciar selección")
+        print("  • 'listo'        → Iniciar procesamiento")
+        print("  • 'salir'        → Volver al menú")
+        print("=" * 60)
+        
+        seleccionadas = []
+        
+        while True:
+            # Mostrar estado
+            if seleccionadas:
+                print(f"\n📌 Seleccionadas ({len(seleccionadas)}): {', '.join(seleccionadas[:3])}{'...' if len(seleccionadas) > 3 else ''}")
+            else:
+                print("\n📌 Ninguna clase seleccionada")
+            
+            cmd = input("\n➤ Comando: ").strip().lower()
+            
+            if cmd == 'listo':
+                if not seleccionadas:
+                    print("\n⚠️  No has seleccionado nada")
+                    print("¿Usar TODAS las clases? (s/n): ", end="")
+                    if input().lower() == 's':
+                        return None  # None = todas las clases
+                    continue
+                return seleccionadas
+            
+            elif cmd == 'salir':
+                return None
+            
+            elif cmd == 'todos':
+                seleccionadas = self.clases.copy()
+                print(f"✅ {len(seleccionadas)} clases agregadas")
+            
+            elif cmd == 'ver':
+                if seleccionadas:
+                    print("\n" + "="*50)
+                    for i, c in enumerate(seleccionadas, 1):
+                        print(f"  {i}. {c}")
+                    print("="*50)
+                else:
+                    print("\n❌ Lista vacía")
+            
+            elif cmd == 'limpiar':
+                seleccionadas.clear()
+                print("✅ Lista limpiada")
+            
+            else:
+                try:
+                    num = int(cmd)
+                    if 1 <= num <= len(self.clases):
+                        clase = self.clases[num - 1]
+                        if clase in seleccionadas:
+                            seleccionadas.remove(clase)
+                            print(f"➖ Quitado: {clase}")
+                        else:
+                            seleccionadas.append(clase)
+                            print(f"✅ Agregado: {clase}")
+                    else:
+                        print(f"❌ Número fuera de rango (1-{len(self.clases)})")
+                except:
+                    print("❌ Comando no válido")
+    
+    def _procesar_video(self, video_path, clases_objetivo, conf, guardar, mostrar):
+        """Procesa el video con las clases seleccionadas"""
+        try:
+            model = YOLO(self.model_path)
+            cap = cv2.VideoCapture(video_path)
+            
+            if not cap.isOpened():
+                print("❌ No se puede abrir el video")
+                return
+            
+            # Info del video
+            fps = int(cap.get(cv2.CAP_PROP_FPS))
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            print(f"📊 Video: {width}x{height} @ {fps}fps | {total_frames} frames")
+            print(f"🎯 Confianza: {conf}")
+            
+            # Video de salida
+            writer = None
+            if guardar:
+                output_path = f"output_{Path(video_path).stem}.mp4"
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+                print(f"💾 Guardando en: {output_path}")
+            
+            # Configurar GPIO
+            gpio_ok = self._setup_gpio()
+            
+            # Contadores
+            detecciones_totales = {clase: 0 for clase in self.clases}
+            frame_num = 0
+            todas_detectadas_count = 0
+            
+            print("\n🔄 Procesando frames...\n")
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                frame_num += 1
+                
+                # Detección
+                results = model(frame, conf=conf, verbose=False)
+                
+                # Filtrar por clases objetivo
+                if clases_objetivo:
+                    boxes = results[0].boxes
+                    clases_detectadas = set()
+                    
+                    for box in boxes:
+                        clase_nombre = model.names[int(box.cls[0])]
+                        if clase_nombre in clases_objetivo:
+                            clases_detectadas.add(clase_nombre)
+                            detecciones_totales[clase_nombre] += 1
+                    
+                    # Verificar si se detectaron TODAS las clases objetivo
+                    todas_detectadas = len(clases_detectadas) == len(clases_objetivo)
+                    
+                    if todas_detectadas:
+                        todas_detectadas_count += 1
+                    
+                    # Control GPIO
+                    if gpio_ok:
+                        if todas_detectadas:
+                            self._activar_pin(self.pin_detectado)
+                            self._desactivar_pin(self.pin_no_detectado)
+                        else:
+                            self._activar_pin(self.pin_no_detectado)
+                            self._desactivar_pin(self.pin_detectado)
+                    
+                    # Frame anotado
+                    annotated = results[0].plot()
+                    
+                    # Panel de estado
+                    panel_color = (0, 255, 0) if todas_detectadas else (0, 165, 255)  # Verde o naranja
+                    cv2.rectangle(annotated, (10, 10), (400, 100), panel_color, -1)
+                    cv2.rectangle(annotated, (10, 10), (400, 100), (255, 255, 255), 2)
+                    
+                    status = "✅ TODAS DETECTADAS" if todas_detectadas else "🔍 BUSCANDO..."
+                    cv2.putText(annotated, status, (20, 40), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+                    
+                    faltantes = set(clases_objetivo) - clases_detectadas
+                    if faltantes:
+                        texto = f"Faltan: {', '.join(list(faltantes)[:2])}"
+                        cv2.putText(annotated, texto, (20, 70), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+                
+                else:
+                    # Detectar todas las clases
+                    annotated = results[0].plot()
+                    for box in results[0].boxes:
+                        clase_nombre = model.names[int(box.cls[0])]
+                        detecciones_totales[clase_nombre] += 1
+                
+                # Guardar frame
+                if writer:
+                    writer.write(annotated)
+                
+                # Mostrar
+                if mostrar:
+                    cv2.imshow('Procesando Video - Presiona Q para salir', annotated)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        print("\n⚠️  Procesamiento cancelado por el usuario")
+                        break
+                
+                # Progreso
+                if frame_num % 30 == 0:
+                    progreso = (frame_num / total_frames) * 100
+                    print(f"⏳ Frame {frame_num}/{total_frames} ({progreso:.1f}%)")
+            
+            # Limpiar
+            cap.release()
+            if writer:
+                writer.release()
+            cv2.destroyAllWindows()
+            
+            if gpio_ok:
+                self._cleanup_gpio()
+            
+            # Resumen
+            print("\n" + "=" * 60)
+            print("✅ PROCESAMIENTO COMPLETADO")
+            print("=" * 60)
+            print(f"\n📊 Frames procesados: {frame_num}/{total_frames}")
+            
+            if clases_objetivo:
+                print(f"\n🎯 Frames con TODAS las clases: {todas_detectadas_count} ({(todas_detectadas_count/frame_num)*100:.1f}%)")
+                print("\n📈 Detecciones por clase:")
+                for clase in clases_objetivo:
+                    count = detecciones_totales[clase]
+                    print(f"  • {clase}: {count}")
+            else:
+                print("\n📈 Detecciones totales:")
+                for clase, count in detecciones_totales.items():
+                    if count > 0:
+                        print(f"  • {clase}: {count}")
+            
+            if guardar:
+                print(f"\n💾 Video guardado: {output_path}")
+            
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def optimizar(self):
+        """Optimiza el modelo a formato ONNX"""
+        self.limpiar()
+        print("=" * 60)
+        print(" " * 15 + "⚡ OPTIMIZACIÓN DE MODELO")
+        print("=" * 60)
+        print("\n🔄 Exportando modelo a formato ONNX...")
+        print("(Compatible con Jetson Nano)\n")
+        
+        try:
+            model = YOLO(self.model_path)
+            output = model.export(format='onnx', imgsz=640, simplify=True)
+            print(f"\n✅ Modelo exportado: {output}")
+            print("\n💡 Para usar el modelo ONNX:")
+            print(f"   model = YOLO('{output}')")
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
+        
+        input("\nPresiona Enter...")
+    
+    def cambiar_modelo(self):
+        """Cambia la ruta del modelo"""
+        self.limpiar()
+        print("=" * 60)
+        print(" " * 18 + "🔄 CAMBIAR MODELO")
+        print("=" * 60)
+        print(f"\n📦 Modelo actual: {self.model_path}\n")
+        print("Nueva ruta del modelo (.pt o .onnx): ", end="")
+        nueva_ruta = input().strip().strip('"')
+        
+        if Path(nueva_ruta).exists():
+            self.model_path = nueva_ruta
+            print(f"\n✅ Modelo actualizado: {Path(nueva_ruta).name}")
+        else:
+            print("\n❌ Archivo no encontrado")
+        
+        input("\nPresiona Enter...")
+    
+    def _setup_gpio(self):
+        """Configura los pines GPIO (solo en Jetson Nano)"""
+        try:
+            import Jetson.GPIO as GPIO
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(self.pin_detectado, GPIO.OUT, initial=GPIO.LOW)
+            GPIO.setup(self.pin_no_detectado, GPIO.OUT, initial=GPIO.LOW)
+            return True
+        except:
+            return False
+    
+    def _control_pines(self, resultado):
+        """Controla los pines según si hay detecciones"""
+        try:
+            import Jetson.GPIO as GPIO
+            if len(resultado.boxes) > 0:
+                GPIO.output(self.pin_detectado, GPIO.HIGH)
+                GPIO.output(self.pin_no_detectado, GPIO.LOW)
+            else:
+                GPIO.output(self.pin_detectado, GPIO.LOW)
+                GPIO.output(self.pin_no_detectado, GPIO.HIGH)
+        except:
+            pass
+    
+    def _activar_pin(self, pin):
+        """Activa un pin GPIO"""
+        try:
+            import Jetson.GPIO as GPIO
+            GPIO.output(pin, GPIO.HIGH)
+        except:
+            pass
+    
+    def _desactivar_pin(self, pin):
+        """Desactiva un pin GPIO"""
+        try:
+            import Jetson.GPIO as GPIO
+            GPIO.output(pin, GPIO.LOW)
+        except:
+            pass
+    
+    def _cleanup_gpio(self):
+        """Limpia la configuración GPIO"""
+        try:
+            import Jetson.GPIO as GPIO
+            GPIO.cleanup()
+        except:
+            pass
+
+if __name__ == "__main__":
+    menu = MenuEPP()
+    menu.menu_principal()

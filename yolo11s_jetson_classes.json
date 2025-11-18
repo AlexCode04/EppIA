@@ -1,0 +1,32 @@
+{
+  "names": {
+    "0": "Fall-Detected",
+    "1": "Gloves",
+    "2": "Goggles",
+    "3": "Hardhat",
+    "4": "Ladder",
+    "5": "Mask",
+    "6": "NO-Gloves",
+    "7": "NO-Goggles",
+    "8": "NO-Hardhat",
+    "9": "NO-Mask",
+    "10": "NO-Safety Vest",
+    "11": "Person",
+    "12": "Safety Cone",
+    "13": "Safety Vest"
+  },
+  "epp_classes": [
+    "Gloves",
+    "Goggles",
+    "Hardhat",
+    "Mask",
+    "Safety Vest"
+  ],
+  "no_epp_classes": [
+    "NO-Gloves",
+    "NO-Goggles",
+    "NO-Hardhat",
+    "NO-Mask",
+    "NO-Safety Vest"
+  ]
+}
