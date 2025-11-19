@@ -202,7 +202,14 @@ class MenuEPP:
         except:
             conf = 0.25
         
-        print(f"\n🔄 Cargando modelo (conf={conf})...")
+        print("Tamaño de imagen (default 640, menor=más rápido): ", end="")
+        try:
+            imgsz = int(input().strip() or "640")
+            imgsz = max(320, min(1280, (imgsz // 32) * 32))
+        except:
+            imgsz = 640
+        
+        print(f"\n🔄 Cargando modelo (conf={conf}, imgsz={imgsz})...")
         
         try:
             model = YOLO(self.model_path)
@@ -227,8 +234,8 @@ class MenuEPP:
                 if not ret:
                     break
                 
-                # Detección
-                results = model(frame, conf=conf, verbose=False)
+                # Detección con resize
+                results = model(frame, conf=conf, imgsz=imgsz, verbose=False)
                 annotated = results[0].plot()
                 
                 # Control de hardware según detecciones
@@ -297,6 +304,14 @@ class MenuEPP:
         except:
             conf = 0.25
         
+        print("Tamaño de imagen para detección (default 640, mayor=más lento): ", end="")
+        try:
+            imgsz = int(input().strip() or "640")
+            # Validar que sea múltiplo de 32
+            imgsz = max(320, min(1280, (imgsz // 32) * 32))
+        except:
+            imgsz = 640
+        
         print("¿Guardar video procesado? (s/n): ", end="")
         guardar = input().lower().strip() == 's'
         
@@ -308,7 +323,7 @@ class MenuEPP:
         print("🔄 Procesando...")
         print("-" * 60 + "\n")
         
-        self._procesar_video(video, clases_objetivo, conf, guardar, mostrar)
+        self._procesar_video(video, clases_objetivo, conf, guardar, mostrar, imgsz)
         
         input("\nPresiona Enter...")
     
@@ -389,7 +404,7 @@ class MenuEPP:
                 except:
                     print("❌ Comando no válido")
     
-    def _procesar_video(self, video_path, clases_objetivo, conf, guardar, mostrar):
+    def _procesar_video(self, video_path, clases_objetivo, conf, guardar, mostrar, imgsz=640):
         """Procesa el video con las clases seleccionadas"""
         try:
             model = YOLO(self.model_path)
@@ -406,7 +421,8 @@ class MenuEPP:
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             
             print(f"📊 Video: {width}x{height} @ {fps}fps | {total_frames} frames")
-            print(f"🎯 Confianza: {conf}")
+            print(f"🎯 Confianza: {conf} | Tamaño detección: {imgsz}px")
+            print(f"💡 Nota: Frames se redimensionan a {imgsz}px para detección, luego se restauran")
             
             # Video de salida
             writer = None
@@ -436,8 +452,8 @@ class MenuEPP:
                 
                 frame_num += 1
                 
-                # Detección
-                results = model(frame, conf=conf, verbose=False)
+                # Detección con tamaño de imagen especificado
+                results = model(frame, conf=conf, imgsz=imgsz, verbose=False)
                 
                 # Filtrar por clases objetivo
                 if clases_objetivo:
