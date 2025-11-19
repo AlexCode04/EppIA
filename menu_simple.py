@@ -11,12 +11,142 @@ class MenuEPP:
             'Mask', 'NO-Gloves', 'NO-Goggles', 'NO-Hardhat', 'NO-Mask',
             'NO-Safety Vest', 'Person', 'Safety Cone', 'Safety Vest'
         ]
-        # Pines GPIO para Jetson Nano
-        self.pin_detectado = 17      # Se activa cuando SE detectan todas las clases
-        self.pin_no_detectado = 27   # Se activa cuando NO se detectan todas
+        
+        # ============================================================
+        # CONFIGURACIÓN DE PINES GPIO JETSON NANO (BCM)
+        # ============================================================
+        
+        # --- PINES PARA LCD I2C (4 pines) ---
+        # La pantalla LCD con módulo I2C usa comunicación I2C
+        # Bus I2C-1 de Jetson Nano (pines físicos 3 y 5):
+        self.lcd_sda = 2          # GPIO 2 (Pin físico 3) - SDA (Datos I2C)
+        self.lcd_scl = 3          # GPIO 3 (Pin físico 5) - SCL (Clock I2C)
+        # Alimentación LCD:
+        # VCC -> Pin físico 1 o 17 (3.3V) o Pin físico 2 o 4 (5V según tu LCD)
+        # GND -> Pin físico 6, 9, 14, 20, 25, 30, 34, 39 (cualquier GND)
+        
+        # --- PIN PARA SERVO MOTOR (1 pin + alimentación) ---
+        self.servo_pin = 33       # GPIO 13 (Pin físico 33) - PWM para control servo
+        # Alimentación Servo:
+        # VCC -> Pin físico 2 o 4 (5V)
+        # GND -> Pin físico 6, 9, 14, 20, 25, 30, 34, 39 (cualquier GND)
+        
+        # --- PINES DE SEÑAL DIGITAL (8 pines totales) ---
+        # Cuando SE DETECTAN todas las clases (EPP completo):
+        self.pines_detectado = [
+            17,  # GPIO 17 (Pin físico 11) - Señal 1 (HIGH cuando detectado)
+            18,  # GPIO 18 (Pin físico 12) - Señal 2 (HIGH cuando detectado)
+            27,  # GPIO 27 (Pin físico 13) - Señal 3 (HIGH cuando detectado)
+            22   # GPIO 22 (Pin físico 15) - Señal 4 (HIGH cuando detectado)
+        ]
+        
+        # Cuando NO se detectan todas las clases (EPP incompleto):
+        self.pines_no_detectado = [
+            23,  # GPIO 23 (Pin físico 16) - Señal 5 (HIGH cuando NO detectado)
+            24,  # GPIO 24 (Pin físico 18) - Señal 6 (HIGH cuando NO detectado)
+            25,  # GPIO 25 (Pin físico 22) - Señal 7 (HIGH cuando NO detectado)
+            5    # GPIO 5  (Pin físico 29) - Señal 8 (HIGH cuando NO detectado)
+        ]
+        
+        # Dirección I2C de la pantalla LCD (normalmente 0x27 o 0x3F)
+        self.lcd_address = 0x27
         
     def limpiar(self):
         os.system('cls' if os.name == 'nt' else 'clear')
+    
+    def _inicializar_hardware(self):
+        """Inicializa LCD, Servo y GPIO"""
+        try:
+            # Inicializar I2C para LCD
+            import board
+            import busio
+            from adafruit_character_lcd.character_lcd_i2c import Character_LCD_I2C
+            
+            i2c = busio.I2C(board.SCL, board.SDA)
+            self.lcd = Character_LCD_I2C(i2c, 16, 2, self.lcd_address)  # LCD 16x2
+            self.lcd.clear()
+            self.lcd.message = "Sistema EPP\nIniciando..."
+            
+            # Inicializar GPIO
+            import Jetson.GPIO as GPIO
+            GPIO.setmode(GPIO.BCM)
+            
+            # Configurar servo
+            GPIO.setup(self.servo_pin, GPIO.OUT)
+            self.servo_pwm = GPIO.PWM(self.servo_pin, 50)  # 50Hz para servo
+            self.servo_pwm.start(0)
+            
+            # Configurar pines de detección
+            for pin in self.pines_detectado:
+                GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
+            for pin in self.pines_no_detectado:
+                GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
+            
+            return True
+        except Exception as e:
+            print(f"⚠️  Hardware no disponible: {e}")
+            self.lcd = None
+            self.servo_pwm = None
+            return False
+    
+    def _mostrar_lcd(self, linea1, linea2=""):
+        """Muestra mensaje en LCD 16x2"""
+        if self.lcd:
+            try:
+                self.lcd.clear()
+                self.lcd.message = f"{linea1[:16]}\n{linea2[:16]}"
+            except:
+                pass
+    
+    def _abrir_puerta(self):
+        """Abre la puerta moviendo el servo a 90 grados"""
+        if self.servo_pwm:
+            try:
+                # Ciclo de trabajo para 90 grados: ~7.5%
+                self.servo_pwm.ChangeDutyCycle(7.5)
+                import time
+                time.sleep(1)
+                self.servo_pwm.ChangeDutyCycle(0)  # Detener señal
+            except:
+                pass
+    
+    def _cerrar_puerta(self):
+        """Cierra la puerta moviendo el servo a 0 grados"""
+        if self.servo_pwm:
+            try:
+                # Ciclo de trabajo para 0 grados: ~2.5%
+                self.servo_pwm.ChangeDutyCycle(2.5)
+                import time
+                time.sleep(1)
+                self.servo_pwm.ChangeDutyCycle(0)  # Detener señal
+            except:
+                pass
+    
+    def _activar_pines_acceso_permitido(self):
+        """Activa pines cuando SE detectan todos los EPP (pines_detectado=HIGH)"""
+        try:
+            import Jetson.GPIO as GPIO
+            # Activar pines de detección (señal HIGH = EPP completo)
+            for pin in self.pines_detectado:
+                GPIO.output(pin, GPIO.HIGH)
+            # Desactivar pines de no detección
+            for pin in self.pines_no_detectado:
+                GPIO.output(pin, GPIO.LOW)
+        except:
+            pass
+    
+    def _activar_pines_acceso_denegado(self):
+        """Activa pines cuando NO se detectan todos los EPP (pines_no_detectado=HIGH)"""
+        try:
+            import Jetson.GPIO as GPIO
+            # Desactivar pines de detección
+            for pin in self.pines_detectado:
+                GPIO.output(pin, GPIO.LOW)
+            # Activar pines de no detección (señal HIGH = falta EPP)
+            for pin in self.pines_no_detectado:
+                GPIO.output(pin, GPIO.HIGH)
+        except:
+            pass
     
     def menu_principal(self):
         while True:
@@ -25,11 +155,16 @@ class MenuEPP:
             print(" " * 18 + "🔧 DETECCIÓN EPP")
             print("=" * 60)
             print(f"\n📦 Modelo: {Path(self.model_path).name}")
-            print(f"🔌 GPIO Jetson: Pin {self.pin_detectado} (✅) | Pin {self.pin_no_detectado} (❌)")
+            print(f"🔌 Hardware Jetson Nano:")
+            print(f"   • LCD I2C: SDA=GPIO{self.lcd_sda}, SCL=GPIO{self.lcd_scl}")
+            print(f"   • Servo Motor: GPIO{self.servo_pin}")
+            print(f"   • Pines Detectado (HIGH): {self.pines_detectado}")
+            print(f"   • Pines NO Detectado (HIGH): {self.pines_no_detectado}")
             print("\n  [1] 📹 Detección en Vivo (Cámara)")
             print("  [2] 🎬 Detección por Video")
-            print("  [3] ⚡ Optimizar Modelo (ONNX)")
-            print("  [4] 🔄 Cambiar Modelo")
+            print("  [3] 🔧 Test Hardware (LCD + Servo)")
+            print("  [4] ⚡ Optimizar Modelo (ONNX)")
+            print("  [5] 🔄 Cambiar Modelo")
             print("  [0] ❌ Salir")
             print("\n" + "=" * 60)
             
@@ -43,8 +178,10 @@ class MenuEPP:
             elif opcion == '2':
                 self.deteccion_video()
             elif opcion == '3':
-                self.optimizar()
+                self.test_hardware()
             elif opcion == '4':
+                self.optimizar()
+            elif opcion == '5':
                 self.cambiar_modelo()
             else:
                 print("\n❌ Opción inválida")
@@ -79,8 +216,11 @@ class MenuEPP:
             print("✅ Iniciando detección")
             print("💡 Presiona 'q' para salir\n")
             
-            # Configurar GPIO si está en Jetson
-            gpio_ok = self._setup_gpio()
+            # Inicializar hardware
+            hw_ok = self._inicializar_hardware()
+            
+            if hw_ok:
+                self._mostrar_lcd("Sistema EPP", "Detectando...")
             
             while True:
                 ret, frame = cap.read()
@@ -91,9 +231,16 @@ class MenuEPP:
                 results = model(frame, conf=conf, verbose=False)
                 annotated = results[0].plot()
                 
-                # Control de pines GPIO
-                if gpio_ok:
-                    self._control_pines(results[0])
+                # Control de hardware según detecciones
+                if hw_ok:
+                    if len(results[0].boxes) > 0:
+                        self._activar_pines_acceso_permitido()
+                        self._mostrar_lcd("ACCESO PERMITIDO", "EPP Completo OK")
+                        self._abrir_puerta()
+                    else:
+                        self._activar_pines_acceso_denegado()
+                        self._mostrar_lcd("ACCESO DENEGADO", "Falta EPP!")
+                        self._cerrar_puerta()
                 
                 cv2.imshow('Detección en Vivo - Presiona Q para salir', annotated)
                 
@@ -103,7 +250,8 @@ class MenuEPP:
             cap.release()
             cv2.destroyAllWindows()
             
-            if gpio_ok:
+            if hw_ok:
+                self._mostrar_lcd("Sistema EPP", "Detenido")
                 self._cleanup_gpio()
                 
         except Exception as e:
@@ -268,8 +416,11 @@ class MenuEPP:
                 writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
                 print(f"💾 Guardando en: {output_path}")
             
-            # Configurar GPIO
-            gpio_ok = self._setup_gpio()
+            # Inicializar hardware
+            hw_ok = self._inicializar_hardware()
+            
+            if hw_ok:
+                self._mostrar_lcd("Procesando", "Video...")
             
             # Contadores
             detecciones_totales = {clase: 0 for clase in self.clases}
@@ -305,14 +456,17 @@ class MenuEPP:
                     if todas_detectadas:
                         todas_detectadas_count += 1
                     
-                    # Control GPIO
-                    if gpio_ok:
+                    # Control hardware
+                    if hw_ok:
                         if todas_detectadas:
-                            self._activar_pin(self.pin_detectado)
-                            self._desactivar_pin(self.pin_no_detectado)
+                            self._activar_pines_acceso_permitido()
+                            self._mostrar_lcd("ACCESO PERMITIDO", "Puede entrar")
+                            self._abrir_puerta()
                         else:
-                            self._activar_pin(self.pin_no_detectado)
-                            self._desactivar_pin(self.pin_detectado)
+                            self._activar_pines_acceso_denegado()
+                            faltante = list(faltantes)[0] if faltantes else "EPP"
+                            self._mostrar_lcd("ACCESO DENEGADO", f"Falta {faltante[:12]}")
+                            self._cerrar_puerta()
                     
                     # Frame anotado
                     annotated = results[0].plot()
@@ -361,7 +515,8 @@ class MenuEPP:
                 writer.release()
             cv2.destroyAllWindows()
             
-            if gpio_ok:
+            if hw_ok:
+                self._mostrar_lcd("Proceso", "Completado")
                 self._cleanup_gpio()
             
             # Resumen
@@ -410,6 +565,73 @@ class MenuEPP:
         
         input("\nPresiona Enter...")
     
+    def test_hardware(self):
+        """Prueba el LCD, Servo y pines GPIO"""
+        self.limpiar()
+        print("=" * 60)
+        print(" " * 15 + "🔧 TEST DE HARDWARE")
+        print("=" * 60)
+        print("\n🔄 Inicializando hardware...\n")
+        
+        try:
+            if self._inicializar_hardware():
+                print("✅ Hardware inicializado correctamente\n")
+                
+                # Test LCD
+                print("📟 Probando LCD...")
+                self._mostrar_lcd("TEST LCD", "Linea 2")
+                import time
+                time.sleep(2)
+                
+                # Test Servo - Abrir
+                print("🚪 Probando Servo - Abriendo puerta...")
+                self._mostrar_lcd("Probando Servo", "Abriendo...")
+                self._abrir_puerta()
+                time.sleep(2)
+                
+                # Test Servo - Cerrar
+                print("🚪 Probando Servo - Cerrando puerta...")
+                self._mostrar_lcd("Probando Servo", "Cerrando...")
+                self._cerrar_puerta()
+                time.sleep(2)
+                
+                # Test pines de acceso permitido (señal HIGH)
+                print("✅ Probando pines de acceso permitido (GPIOs 17,18,27,22 = HIGH)...")
+                self._mostrar_lcd("ACCESO", "PERMITIDO")
+                self._activar_pines_acceso_permitido()
+                time.sleep(3)
+                
+                # Test pines de acceso denegado (señal HIGH)
+                print("❌ Probando pines de acceso denegado (GPIOs 23,24,25,5 = HIGH)...")
+                self._mostrar_lcd("ACCESO", "DENEGADO")
+                self._activar_pines_acceso_denegado()
+                time.sleep(3)
+                
+                # Apagar todo
+                print("🔌 Apagando todos los pines...")
+                self._mostrar_lcd("Test", "Completado")
+                for pin in self.pines_detectado + self.pines_no_detectado:
+                    try:
+                        import Jetson.GPIO as GPIO
+                        GPIO.output(pin, GPIO.LOW)
+                    except:
+                        pass
+                
+                time.sleep(1)
+                self._cleanup_gpio()
+                
+                print("\n✅ Test completado exitosamente")
+            else:
+                print("❌ No se pudo inicializar el hardware")
+                print("   Verifica conexiones y que estés en Jetson Nano")
+                
+        except Exception as e:
+            print(f"\n❌ Error durante el test: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        input("\nPresiona Enter...")
+    
     def cambiar_modelo(self):
         """Cambia la ruta del modelo"""
         self.limpiar()
@@ -427,46 +649,6 @@ class MenuEPP:
             print("\n❌ Archivo no encontrado")
         
         input("\nPresiona Enter...")
-    
-    def _setup_gpio(self):
-        """Configura los pines GPIO (solo en Jetson Nano)"""
-        try:
-            import Jetson.GPIO as GPIO
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setup(self.pin_detectado, GPIO.OUT, initial=GPIO.LOW)
-            GPIO.setup(self.pin_no_detectado, GPIO.OUT, initial=GPIO.LOW)
-            return True
-        except:
-            return False
-    
-    def _control_pines(self, resultado):
-        """Controla los pines según si hay detecciones"""
-        try:
-            import Jetson.GPIO as GPIO
-            if len(resultado.boxes) > 0:
-                GPIO.output(self.pin_detectado, GPIO.HIGH)
-                GPIO.output(self.pin_no_detectado, GPIO.LOW)
-            else:
-                GPIO.output(self.pin_detectado, GPIO.LOW)
-                GPIO.output(self.pin_no_detectado, GPIO.HIGH)
-        except:
-            pass
-    
-    def _activar_pin(self, pin):
-        """Activa un pin GPIO"""
-        try:
-            import Jetson.GPIO as GPIO
-            GPIO.output(pin, GPIO.HIGH)
-        except:
-            pass
-    
-    def _desactivar_pin(self, pin):
-        """Desactiva un pin GPIO"""
-        try:
-            import Jetson.GPIO as GPIO
-            GPIO.output(pin, GPIO.LOW)
-        except:
-            pass
     
     def _cleanup_gpio(self):
         """Limpia la configuración GPIO"""
